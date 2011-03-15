@@ -1,24 +1,22 @@
 #!/bin/bash
 
+BUILD_STATUS=0
+
 build_openssl() {
-	local LIBNAME=$1
+	local TARGET_DIR="$1"
+	local LIBNAME=$2
 	local DISTDIR="`pwd`/dist-$LIBNAME"
-	local PLATFORM="$2"
-	local SDKPATH="$3"
+	local PLATFORM="$3"
+	local SDKPATH="$4"
 
 	echo "Building binary for iPhone $LIBNAME $PLATFORM to $DISTDIR"
 
-	echo Removing ${TARGET}
-	/bin/rm -rf ${TARGET}
-	echo Extracting ${TARGET}
-	tar zxf ${TARGET}.tar.gz
-
 	case $LIBNAME in
-		device)  ARCH="armv6";ASSEMBLY="no-asm";;
+		${LIBNAME_DEVICE})  ARCH="armv6";ASSEMBLY="no-asm";;
 		*)	   ARCH="i386";ASSEMBLY="";;
 	esac
 
-	cd ${TARGET}
+	cd "${TARGET_DIR}"
 
 	echo Patching crypto/ui/ui_openssl.c
 	echo From: `fgrep 'intr_signal;' crypto/ui/ui_openssl.c`
@@ -43,7 +41,7 @@ build_openssl() {
 		Makefile
 
 	case $LIBNAME in
-		simulator)
+		${LIBNAME_SIMULATOR})
 			perl -pi.bak \
 				-e 'if (/LIBDEPS=/) { s/\)}";/\)} -L.";/; }' \
 					Makefile.shared
@@ -54,10 +52,34 @@ build_openssl() {
 
 	# using && means the next command only runs if the previous commands all succeeded
 	# use -j (with # of CPUs) for parallel, fast build
-	make -j `/usr/bin/hwprefs cpu_count` && make install
-	cd ..
-	echo Cleaning up "${TARGET}"
-	/bin/rm -rf ${TARGET}
+	echo "# Building clean first"
+	make -j `/usr/bin/hwprefs cpu_count` clean
+	echo "# Building libraries (only)"
+	make -j `/usr/bin/hwprefs cpu_count` build_libs && make install
+	BUILD_STATUS=$?
+	cd -
+}
+
+extract_tarball() {
+	local tarball="$1"
+	local dir="${tarball%%.tar.gz}"
+	if [ -d "${dir}" ]; then
+		echo Removing previous tarball directory: ${dir}
+		/bin/rm -rf ${dir}
+	fi
+	echo Extracting tarball ${tarball}
+	tar zxf ${tarball}
+}
+
+clean_dir() {
+	local dir="$1"
+	if [ $BUILD_STATUS = 0 ]; then
+		echo Cleaning up "${DIR}"
+		/bin/rm -rf ${DIR}
+	else
+		echo "Build failed ($BUILD_STATUS)"
+		exit 1
+	fi
 }
 
 latest_sdk() {
@@ -72,43 +94,100 @@ latest_sdk() {
 	popd
 }
 
-TARGET=openssl-1.0.0d
-XCODE=`xcode-select -print-path`
-PLATFORMS="${XCODE}"/Platforms
+# use getopt to get command-line options
+args=`getopt d:t: $*`; errcode=$?; set -- $args
 
-MAC_PLATFORM="${PLATFORMS}"/MacOSX.platform
-IOS_PLATFORM="${PLATFORMS}"/iPhoneOS.platform
-IOS_SIMULATOR_PLATFORM="${PLATFORMS}"/iPhoneSimulator.platform
+if [ $errcode != 0 ]; then
+	echo <<EOF
+Usage: $0 [-d dir] [-t tb.tar.gz]
+	-d dir -- build already-extracted tarball in dir
+	-t tb.tar.gz -- use specified tarball
+You should specify **either** the tarball or the directory, but not both.	
+EOF
+	exit 1
+fi
 
-MAC_SDK_DIR="$MAC_PLATFORM/Developer/SDKs"
-IOS_SDK_DIR="$IOS_PLATFORM/Developer/SDKs"
-IOS_SIMULATOR_SDK_DIR="$IOS_SIMULATOR_PLATFORM/Developer/SDKs"
+for i; do
+	echo "i is $i [$*]"
+	case "$i"
+	in
+		-d) echo "target_dir $2"; TARGET_DIR="$2"; shift;;
+		-t) echo "target $2"; TARGET="$2"; shift;;
+		--) shift; break;;
+	esac
+done
 
-OPATH=$PATH
+if [ ${#TARGET} -gt 0 -a ${#TARGET_DIR} -gt 0 ]; then
+	echo "Only specify *either* the target directory or the tarball"
+	exit 1
+fi
+if [ ${#TARGET} = 0 -a ${#TARGET_DIR} = 0 ]; then
+	echo "Please specify either the target directory or the tarball"
+	exit 1
+fi
 
-# latest_sdk() sets "LATEST_SDK" to the latest one (why can't functions return values? *sigh)
-latest_sdk "$IOS_SDK_DIR"
-IOS_SDK="$LATEST_SDK"
-latest_sdk "$IOS_SIMULATOR_SDK_DIR"
-IOS_SIMULATOR_SDK="$LATEST_SDK"
+if [ ${#TARGET} ]; then
+	TARGET_DIR="${TARGET%%.tar.gz}"
+fi
 
-build_openssl "device" "$IOS_PLATFORM" "$IOS_SDK"
-build_openssl "simulator" "$IOS_SIMULATOR_PLATFORM" "$IOS_SIMULATOR_SDK"
+setup_vars() {
+	# use whatever name you want for the libraries
+	LIBNAME_DEVICE=device
+	LIBNAME_SIMULATOR=simulator
 
-### Then, combine them into one..
+	# don't touch anything below
 
+	# if you want to change the "current" Xcode, use "sudo xcode-select switch <path>"
+	XCODE=`xcode-select -print-path`
+	PLATFORMS="${XCODE}"/Platforms
+
+	MAC_PLATFORM="${PLATFORMS}"/MacOSX.platform
+	IOS_PLATFORM="${PLATFORMS}"/iPhoneOS.platform
+	IOS_SIMULATOR_PLATFORM="${PLATFORMS}"/iPhoneSimulator.platform
+
+	MAC_SDK_DIR="$MAC_PLATFORM/Developer/SDKs"
+	IOS_SDK_DIR="$IOS_PLATFORM/Developer/SDKs"
+	IOS_SIMULATOR_SDK_DIR="$IOS_SIMULATOR_PLATFORM/Developer/SDKs"
+
+	OPATH=$PATH
+
+	# latest_sdk() sets "LATEST_SDK" to the latest one (why can't functions return values? *sigh)
+	latest_sdk "$IOS_SDK_DIR"
+	IOS_SDK="$LATEST_SDK"
+	latest_sdk "$IOS_SIMULATOR_SDK_DIR"
+	IOS_SIMULATOR_SDK="$LATEST_SDK"
+
+}
+
+setup_vars
+
+# build device library
+[ ${#TARGET} -gt 0 ] && extract_tarball "${TARGET}"
+build_openssl "$TARGET_DIR" "${LIBNAME_DEVICE}" "$IOS_PLATFORM" "$IOS_SDK"
+if [ ${#TARGET} -gt 0 ]; then
+	clean_dir "${TARGET%%.tar.gz}"
+	extract_tarball "${TARGET}"
+else
+	build_clean "$TARGET_DIR" "${LIBNAME_DEVICE}" "$IOS_PLATFORM" "$IOS_SDK"
+fi
+
+# build simulator library
+build_openssl "$TARGET_DIR" "${LIBNAME_SIMULATOR}" "$IOS_SIMULATOR_PLATFORM" "$IOS_SIMULATOR_SDK"
+clean_dir "${TARGET%%.tar.gz}"
+
+# then, combine them into one..
 echo "Creating combined binary into directory 'dist'"
-/bin/rm -rf dist
+[ -d dist ] && /bin/rm -rf dist
 mkdir dist
-(cd dist-device; tar cf - . ) | (cd dist; tar xf -)
+(cd dist-${LIBNAME_DEVICE}; tar cf - . ) | (cd dist; tar xf -)
 
 for i in crypto ssl
 do
 	lipo \
-		-create dist-device/lib/lib$i.a dist-simulator/lib/lib$i.a \
+		-create dist-${LIBNAME_DEVICE}/lib/lib$i.a dist-${LIBNAME_SIMULATOR}/lib/lib$i.a \
 		-o dist/lib/lib$i.a
 done
 
-/bin/rm -rf dist-simulator dist-device
+/bin/rm -rf dist-${LIBNAME_SIMULATOR} dist-${LIBNAME_DEVICE}
 
 echo "Now package is ready in 'dist' directory'"
