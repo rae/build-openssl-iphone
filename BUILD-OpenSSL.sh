@@ -20,7 +20,7 @@ build_openssl() {
 
 	p Patching crypto/ui/ui_openssl.c
 	p From: `fgrep 'intr_signal;' crypto/ui/ui_openssl.c`
-	x perl -pi.bak \
+	perl -pi.bak \
 		-e 's/static volatile sig_atomic_t intr_signal;/static volatile int intr_signal;/;' \
 		crypto/ui/ui_openssl.c
 	p To: `fgrep 'intr_signal;' crypto/ui/ui_openssl.c`
@@ -34,11 +34,17 @@ build_openssl() {
 	for dflag in "" -d; do
 		# # for now *always* build debug versions
 		# dflag=-d
+
+		p "# Building clean on current config first"
+		x make clean
+
+		p "# Putting intermediate builds into directory ${DISTDIR}${dflag}"
 		x mkdir "${DISTDIR}${dflag}"
 
-		p "# configuring: $dflag $DISTDIR $ASSEMBLY" 
+		p "# configuring: ${dflag} --openssldir=${DISTDIR}${dflag} ${ASSEMBLY}" 
 		x ./config ${dflag} --openssldir="${DISTDIR}${dflag}" ${ASSEMBLY}
 
+		p "# hand-editing CC, CFLAG and -arch in Makefile"
 		perl -pi.bak \
 			-e "s#CC= cc#CC=${PLATFORM}/Developer/usr/bin/gcc# ;" \
 			-e "s#CFLAG= #CFLAG=-arch ${ARCH} -isysroot ${SDKPATH} # ;" \
@@ -55,16 +61,15 @@ build_openssl() {
 				;;
 		esac
 
-		# use -j (with # of CPUs) for parallel, fast build
-		p "# Building clean first"
-		x make -j `/usr/bin/hwprefs cpu_count` clean
 		p "# Building libraries (only)"
-		# using && means the next command only runs if the previous commands all succeeded
+		# use -j (with # of CPUs) for parallel, fast build
 		x make -j `/usr/bin/hwprefs cpu_count` build_libs
 		BUILD_STATUS=$?
 		[ $BUILD_STATUS != 0 ] && break
 		p "# installing ${DISTDIR}${dflag}"
 		x make install
+		echo -n "Finished ${DISTDIR}${dflag}. Hit ENTER to continue: "
+		read input
 	done
 	cd -
 }
@@ -106,7 +111,7 @@ latest_sdk() {
 
 setup_vars() {
 	# clean up old compiler output
-	rm -f /tmp/buildopenssl-*
+	rm -f /tmp/build_openssl-*
 	# where verbose compiler output goes
 	OUT=`mktemp /tmp/build_openssl.XXXXXX` || exit 1
 
@@ -139,7 +144,7 @@ setup_vars() {
 }
 
 p() {
-	echo $* | tee -a $OUT 2>&1
+	echo "$*" | tee -a $OUT 2>&1
 }
 
 x() {
@@ -219,5 +224,5 @@ done
 # /bin/rm -rf dist-${LIBNAME_SIMULATOR} dist-${LIBNAME_DEVICE}
 # /bin/rm -rf dist-${LIBNAME_SIMULATOR}-d dist-${LIBNAME_DEVICE}-d
 
-p "Now package is ready in 'dist' directory'"
+p "Now package is ready in 'dist' directory"
 p "Verbose output is in $OUT"
