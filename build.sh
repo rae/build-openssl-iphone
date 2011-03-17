@@ -1,4 +1,22 @@
 #!/bin/bash
+#
+# Build OpenSSL libraries for iPhone, both device and simulator. Building debug libraries
+# is attempted, but currently fails for OpenSSL openssl-1.0.0d.  Results of builds are placed
+# in directories dist-{d,}, which contain:
+#		dist	universal (i386,arm) libraries for both device and simulator
+#		dist-d	universal (i386,arm) debug libraries for both device and simulator
+#
+# Currently, since builds are not working cleanly, the arch-specific dist directories are
+# hanging around:
+#		dist-device
+#		dist-device-d
+#		dist-simulator
+#		dist-simulator-d
+#
+# Common usage:
+#	git clone <this project> build-openssl-iphone
+#	wget http://www.openssl.org/source/openssl-1.0.0d.tar.gz
+#	./build-openssl-iphone/BUILD-OpenSSL.sh -t openssl-1.0.0d.tar.gz
 
 BUILD_STATUS=0
 
@@ -9,11 +27,11 @@ build_openssl() {
 	local PLATFORM="$3"
 	local SDKPATH="$4"
 
-	p "Building binary for iPhone $LIBNAME $PLATFORM to $DISTDIR" 
+	p "Building binary for iPhone $LIBNAME $PLATFORM to $DISTDIR from $TARGET_DIR" 
 
 	case $LIBNAME in
-		${LIBNAME_DEVICE})  ARCH="armv6";ASSEMBLY="no-asm";;
-		*)	   ARCH="i386";ASSEMBLY="";;
+		${LIBNAME_DEVICE})	ARCH="armv6"; ASSEMBLY="no-asm";;
+		*)					ARCH="i386";  ASSEMBLY="";;
 	esac
 
 	cd "${TARGET_DIR}"
@@ -147,6 +165,11 @@ p() {
 	echo "$*" | tee -a $OUT 2>&1
 }
 
+px() {
+	echo "$*" | tee -a $OUT
+	$* | tee -a $OUT 2>&1
+}
+
 x() {
 	$* >> $OUT 2>&1
 }
@@ -167,7 +190,7 @@ fi
 for i; do
 	case "$i"
 	in
-		-d) TARGET_DIR="$2"; shift;;
+		-d) TARGET_DIR="$2"; echo "TARGET_DIR is $TARGET_DIR"; shift;;
 		-t) TARGET="$2"; shift;;
 		--) shift; break;;
 	esac
@@ -182,7 +205,8 @@ if [ ${#TARGET} = 0 -a ${#TARGET_DIR} = 0 ]; then
 	exit 1
 fi
 
-if [ ${#TARGET} ]; then
+if [ ${#TARGET} -a ${#TARGET_DIR} = 0 ]; then
+	p "Setting TARGET_DIR based on TARGET ($TARGET)"
 	TARGET_DIR="${TARGET%%.tar.gz}"
 fi
 
